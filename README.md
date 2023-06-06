@@ -42,7 +42,7 @@ Then use $cache as laid out in the PW docs. You do not need to care about
 implementation specifics of this module.
 
 ## Advanced
-This module comes with ProcessPoetRedis. When you install 'WireCache Redis Admin',
+This module ships with ProcessPoetRedis. When you install 'WireCache Redis Admin',
 you will find a new entry *Redis WireCache* under *Setup* in the ProcessWire backend.
 It gives you an overview about the settings, statistics and possible errors of your
 connected Redis instance and lets you flush the cache database.
