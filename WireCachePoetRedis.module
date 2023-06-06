@@ -58,7 +58,10 @@ class WireCachePoetRedis extends Process implements ConfigurableModule, WireCach
 			"summary"	=>	_x("Use Redis as caching engine for ProcessWire", __FILE__),
 			"version"	=>	"0.0.2",
 			"autoload"	=>	true,
-			"singular"	=>	true
+			"singular"	=>	true,
+			"requires"	=>	[
+				"ProcessWire>=3.0.219"
+			]
 		];
 	}
 
