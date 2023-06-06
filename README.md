@@ -47,6 +47,23 @@ you will find a new entry *Redis WireCache* under *Setup* in the ProcessWire bac
 It gives you an overview about the settings, statistics and possible errors of your
 connected Redis instance and lets you flush the cache database.
 
+# ToDo
+
+ProcessWire $cache lets you specify a selector as the expiration criteria for
+a cache value instead of a fixed time. When a page or template is saved that
+matches such a selector, all related cache entries expire. See the [documentation for
+$cache::save for details](https://processwire.com/api/ref/wire-cache/save/))
+
+WireCacheDatabase (ProcessWire's default caching engine) stores such selectors
+together with the cache entry's data. Doing the same in Redis would be comparably
+costly since it would result in expensive scans over all keys.
+
+I've therefore decided to store an extra 'selector expiration entry' for every selector
+and save all affected cache keys inside that entry. I'm also considering storing all
+selector-to-key relationships in a single entry, which would certainly save round trips, but
+it might impact memory usage in large scenarios. So this needs some serious testing
+before I can make an educated decision.
+
 ## License
 Lincensed under Mozilla Public License 2.0. See file "LICENSE" in this package
 for details.
