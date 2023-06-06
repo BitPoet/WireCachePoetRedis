@@ -77,7 +77,7 @@ class WireCachePoetRedis extends Process implements ConfigurableModule, WireCach
 		
 		if(! $this->cacheactive) return;
 		
-		if(! extension_loaded('redisx')) {
+		if(! extension_loaded('redis')) {
 			$this->session->error($this->_('Redis extension missing in PHP. Cannot activate WireCachePoetRedis. Please see https://github.com/phpredis/phpredis#installation'));
 			return;
 		}
