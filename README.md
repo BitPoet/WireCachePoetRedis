@@ -5,7 +5,10 @@ Redis caching for the ProcessWire CMS
 Requires ProcessWire 3.0.219 or later.
 
 ## Status
-This is a first release and still needs a lot of testing in the field.
+This is a first release and may still experience major changes. It used prefixes to
+separated ProcessWire and non-ProcessWire contents. That part is still being
+finalized. Unless you are daring and willing to take a stab at the code in case
+things go wonky, you'll probably want to wait a week or two for a beta version.
 
 ## Prerequisites
 To use this module, you need
