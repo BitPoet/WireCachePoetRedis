@@ -1,5 +1,5 @@
 # WireCachePoetRedis
-Redis caching for the ProcessWire CMS
+Redis caching for the [ProcessWire CMS](https://processwire.com)
 
 ## Compatibility
 Requires ProcessWire 3.0.219 or later.
@@ -27,7 +27,7 @@ between this module, the defauilt WireCacheDatabase and the new WireCacheFilesys
 module. Not every caching strategy fits every application.
 
 ## Usage
-Install the module and configure the connection to your Redis instance.
+Install *WireCache Module for Redis* and configure the connection to your Redis instance.
 
 WireCachePoetRedis supports
 - TCP connections
@@ -42,9 +42,9 @@ Then use $cache as laid out in the PW docs. You do not need to care about
 implementation specifics of this module.
 
 ## Advanced
-This module comes with ProcessPoetRedis. When installed, you will find a new
-entry *Redis WireCache* under *Setup* in the ProcessWire backend. It gives
-you an overview about the settings, statistics and possible errors of your
+This module comes with ProcessPoetRedis. When you install 'WireCache Redis Admin',
+you will find a new entry *Redis WireCache* under *Setup* in the ProcessWire backend.
+It gives you an overview about the settings, statistics and possible errors of your
 connected Redis instance and lets you flush the cache database.
 
 ## License
