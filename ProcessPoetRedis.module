@@ -117,7 +117,7 @@ class ProcessPoetRedis extends Process {
 			
 			$field->attr('value', $tbl->render());
 
-			if(isset($icons[$name])) {
+			if(false && isset($icons[$name])) {
 				$tabs[$sectionLabels[$name]] = [$field->render(), $icons[$name]];
 			} else {
 				$tabs[$sectionLabels[$name]] = $field->render();
