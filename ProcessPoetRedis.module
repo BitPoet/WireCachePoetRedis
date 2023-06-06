@@ -1,0 +1,238 @@
+<?php namespace ProcessWire;
+
+/**
+ * Provides the admin page for WireCachePoetRedis.
+ *
+ * All connection settings are done in the module configuration for WireCachePoetRedis.
+ * This is for information / statistics and to manually purge the cache.
+ * More functionality may get added in the future.
+ *
+ * (c) 2023 BitPoet
+ *
+ * Released under Mozilla Public License (MPL) v2
+ */
+class ProcessPoetRedis extends Process {
+
+	public static function getModuleInfo() {
+		return [
+			"title"		=>	_x("WireCache Redis Admin", __FILE__),
+			"summary"	=>	_x("Admin tools for WireCachePoetRedis", __FILE__),
+			"version"	=>	"0.0.1",
+			"singular"	=>	true,
+			"requires"	=>	['WireCachePoetRedis'],
+			"page"		=>	[
+				"name"		=>	'redis-wirecache',
+				"parent"	=>	'setup',
+				"title"		=>	'Redis WireCache'
+			]
+		];
+	}
+
+	public function init() {
+		parent::init();
+
+		$this->tabs = $this->modules->get('JqueryWireTabs');
+	}
+
+	public function ___execute() {
+
+		$sectionLabels = [
+			'server'		=>	$this->_('Server'),
+			'clients'		=>	$this->_('Connections'),
+			'memory'		=>	$this->_('Memory'),
+			'stats'			=>	$this->_('Statistics'),
+			'cpu'			=>	$this->_('CPU'),
+			'cluster'		=>	$this->_('Cluster'),
+			'keyspace'		=>	$this->_('Key Space'),
+			'errorstats'	=>	$this->_('Errors')
+		];
+
+		$icons = [
+			'server'		=>	$this->_('desktop'),
+			'clients'		=>	$this->_('plug'),
+			'memory'		=>	$this->_('cubes'),
+			'stats'			=>	$this->_('bar-chart'),
+			'cpu'			=>	$this->_('thermometer-half'),
+			'cluster'		=>	$this->_('sitemap'),
+			'keyspace'		=>	$this->_('key'),
+			'errorstats'	=>	$this->_('exclamation-triangle')
+		];
+
+		$out = '';
+
+		$wcpr = 'WireCachePoetRedis';
+		$redis = $this->modules->get($wcpr);
+		$moduleUrl = $this->modules->getModuleEditUrl($wcpr);
+		$moduleConfigLink = "<a href='{$moduleUrl}'>" . sprintf($this->_('Click here to check or change your Redis connection')) . " <span class='fa fa-sign-out'></a>";
+		
+		if(! $redis->cacheactive) {
+			$msg = $this->_('Cache is inactive. You can activate it in the module settings.');
+			$this->warning($msg);
+			return '<p><strong>' . $msg . '</strong></p>' .
+				   '<p>' . $moduleConfigLink . '</p>'
+			;
+			
+		}
+		
+		if(! $redis->isConnected()) {
+			$msg = $this->_('Redis database not connected');
+			$this->error($msg);
+			return "<p>$msg</p>" .
+				   '<p>' . $moduleConfigLink . '</p>'
+			;
+		}
+		
+		$form = $this->modules->get('InputfieldForm');
+		$form->attr('id', 'PoetRedisForm');
+		$form->attr('method', 'POST');
+		
+		$sections = $redis->getStatus();
+		$tabs = [];
+		
+		foreach($sections as $name => $section) {
+			
+			$tab = new InputfieldWrapper();
+	        $tab->attr('id', 'tab_' . $name);
+	        $tab->attr('title', $sectionLabels[$name]);
+	        $tab->attr('class', 'WireTab');
+        
+			$field = $this->modules->get('InputfieldMarkup');
+			$field->label = $sectionLabels[$name];
+			
+			$tbl = $this->modules->get('MarkupAdminDataTable');
+			$tbl->setEncodeEntities(false);
+			
+			$tbl->headerRow([
+				$this->_('Entry'),
+				$this->_('Value')
+			]);
+			
+			foreach($section as $key => $value) {
+				
+				$tbl->row([
+					$key,
+					$value
+				]);
+			}
+			
+			$field->attr('value', $tbl->render());
+
+			if(isset($icons[$name])) {
+				$tabs[$sectionLabels[$name]] = [$field->render(), $icons[$name]];
+			} else {
+				$tabs[$sectionLabels[$name]] = $field->render();
+			}
+			
+		}
+		
+		$actionLabel = $this->_("Actions");
+		
+		$wrap = $this->modules->get('InputfieldWrapper');
+		$wrap->label = $actionLabel;
+		
+		$btn = $this->modules->get('InputfieldButton');
+		$btn->attr('href', $this->page->url . 'clear-pw-entries');
+		$btn->html = $this->_('Remove ProcessWire entries from cache');
+		$wrap->append($btn);
+
+		$btn = $this->modules->get('InputfieldButton');
+		$btn->attr('href', $this->page->url . 'clear');
+		$btn->html = $this->_('Clear cache completely');
+		$wrap->append($btn);
+		
+		$tabs[$actionLabel] = [$wrap->render(), 'asterisk'];
+		
+		$wrap = $this->modules->get('InputfieldMarkup');
+		$wrap->attr('value', $this->tabs->render($tabs));
+		
+		$form->append($wrap);
+		
+		return $out . $form->render();
+	}
+
+	public function executeClearPwEntries() {
+		
+		if(! $this->input->post->submit_clear) {
+			
+			$form = $this->modules->get('InputfieldForm');
+			$form->attr('action', './clear-pw-entries');
+			
+			$mrk = $this->modules->get('InputfieldMarkup');
+			$mrk->attr('value', $this->_('Are you sure you want to clear all ProcessWire cache entries from your Redis cache?'));
+			$form->append($mrk);
+			
+			$btn = $this->modules->get('InputfieldSubmit');
+			$btn->html = $this->_("Delete all PW Entries Now!");
+			$btn->addClass('ui-button-danger');
+			$btn->attr('name', 'submit_clear');
+			$btn->attr('value', 'yes');
+			$form->append($btn);
+			
+			return $form->render();
+			
+		} else {
+			
+			$redis = $this->modules->get('WireCachePoetRedis');
+			
+			$count = $redis->deletePwCaches();
+			
+			$countAfter = $redis->countPwKeys();
+			
+			$color = ($countAfter == $count) ? 'darkred' : 'green';
+			
+			$out = "<p style='border: 2px solid $color; border-radius: 0.5em; padding: 2em; font-weight: bold;'>" .
+				   sprintf($this->_('%d of %d ProcessWire keys in the database deleted'), $count - $countAfter, $count) .
+				   "</p>";
+			
+			$out .= "<p><a href='{$this->page->url}'>" . $this->_("Back to overview") . "</a></p>";
+			
+			return $out;
+			
+		}
+	}
+	
+	
+	public function executeClear() {
+		
+		if(! $this->input->post->submit_clear) {
+			
+			$form = $this->modules->get('InputfieldForm');
+			$form->attr('action', './clear');
+			
+			$mrk = $this->modules->get('InputfieldMarkup');
+			$mrk->attr('value', $this->_('Are you sure you want to clear all contents from your Redis cache?'));
+			$form->append($mrk);
+			
+			$btn = $this->modules->get('InputfieldSubmit');
+			$btn->html = $this->_("Clear Cache Now!");
+			$btn->addClass('ui-button-danger');
+			$btn->attr('name', 'submit_clear');
+			$btn->attr('value', 'yes');
+			$form->append($btn);
+			
+			return $form->render();
+			
+		} else {
+			
+			$redis = $this->modules->get('WireCachePoetRedis');
+			
+			$count = $redis->deleteAll();
+			
+			$countAfter = $redis->dbSize();
+			
+			$color = ($countAfter == $count) ? 'darkred' : 'green';
+			
+			$out = "<p style='border: 2px solid $color; border-radius: 0.5em; padding: 2em; font-weight: bold;'>" .
+				   sprintf($this->_('%d of %d keys in the database deleted'), $count - $countAfter, $count) .
+				   "</p>";
+			
+			$out .= "<p><a href='{$this->page->url}'>" . $this->_("Back to overview") . "</a></p>";
+			
+			return $out;
+			
+		}
+		
+	}
+	
+	
+}

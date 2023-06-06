@@ -1,0 +1,591 @@
+<?php namespace ProcessWire;
+
+/**
+ * Redis caching for the ProcessWire CMS.
+ *
+ * This module is a WireCache compatible implementation of Redis based caching.
+ * You need a Redis server instance already running.
+ * Once you install this module and activate it in the module settings, calls
+ * to $cache will be routed to his module and data will be stored in Redis
+ * instead of the 'caches' table in MySQL.
+ *
+ * Note: when you activate WireCachePoetRedis, all caches need to be rebuilt,
+ * no data is taken over from MySQL.
+ *
+ * (c) 2023 BitPoet
+ *
+ * Released under Mozilla Public License (MPL) v2
+ */
+class WireCachePoetRedis extends Process implements ConfigurableModule, WireCacheInterface {
+	
+	protected $redis = false;
+	protected $connected = false;
+	
+	protected static $dbTable = 'poet_redis_selector';
+	
+	const expireDaily = 86400;
+	
+	const expireSave = "save";
+	
+	const expireNever = 0;
+	
+	protected static $expireNames = array(
+		'now' => WireCache::expireNow,
+		'hour' => WireCache::expireHourly,
+		'hourly' => WireCache::expireHourly,
+		'day' => WireCache::expireDaily,
+		'daily' => WireCache::expireDaily,
+		'week' => WireCache::expireWeekly,
+		'weekly' => WireCache::expireWeekly,
+		'month' => WireCache::expireMonthly,
+		'monthly' => WireCache::expireMonthly,
+		'ignore' => WireCache::expireIgnore
+	);
+
+	protected static $typeTemplate = 1;
+	protected static $typePage     = 2;
+	protected static $typeSelector = 4;
+	protected static $typeSave     = 8;
+
+	protected static $selectorPrefix = 'WCPR:selector:';
+
+	protected $usePageTemplateMaintenance = null;
+
+
+	public static function getModuleInfo() {
+		return [
+			"title"		=>	_x("WireCache Module for Redis", __FILE__),
+			"summary"	=>	_x("Use Redis as caching engine for ProcessWire", __FILE__),
+			"version"	=>	"0.0.2",
+			"autoload"	=>	true,
+			"singular"	=>	true
+		];
+	}
+
+	public function isConnected() {
+		return !!$this->connected;
+	}
+
+	/**
+	 * Initialize the module and configure the connection.
+	 *
+	 */
+	public function init() {
+		
+		if(! $this->cacheactive) return;
+		
+		try {
+			
+			$this->redis = new \Redis();
+			$this->connected =  $this->unix ?
+								$this->redis->connect($this->servername) :
+								$this->redis->connect(($this->tls ? 'tls://' : '') . $this->servername, $this->serverport);
+			if($this->useAuth) {
+				$this->connected = $this->redis->auth($this->password);
+			}
+			$this->redis->setOption(\Redis::OPT_SERIALIZER, \Redis::SERIALIZER_PHP);
+			
+		} catch(Exception $e) {
+			
+			$this->log("Error connecting to Redis: {$e->message}");
+			
+		}
+		
+		if(! $this->connected)
+			return;
+		
+		$this->redis->setOption(\Redis::OPT_SCAN, \Redis::SCAN_RETRY);
+
+		$cache = $this->wire()->cache;
+		if($cache) $cache->setCacheModule($this); // set this module as the cache handler
+	}
+
+
+	/**
+	 * Find caches by names and return requested values
+	 * 
+	 * ~~~~~
+	 * // Default options
+	 * $defaults = [
+	 *  'names' => [],
+	 *  'expires' => [],
+	 *  'expiresMode' => 'OR',
+	 *  'get' => [ 'name', 'expires', 'data' ],
+	 * ];
+	 * 
+	 * // Example options
+	 * $options['names'] = [ 'my-cache', 'your-cache', 'hello-*' ];
+	 * $options['expires'] => [ 
+	 *  '<= ' . WireCache::expiresNever, 
+	 *  '>= ' . date('Y-m-d H:i:s') 
+	 * ];
+	 * ~~~~~
+	 *
+	 * @param array $options
+	 *  - `get` (array): Properties to get in return value, one or more of [ `name`, `expires`, `data`, `size` ] (default=all)
+	 *  - `names` (array): Names of caches to find (OR condition). Does NOT support wildcards!
+	 *  - `expires` (array): Expirations of caches to match. WireCachePoetRedis only supports selectors or page/template ids
+	 *    (WireCache::expireSelector, WireCache::expireSave)
+	 *  - `expiresMode` (string): Whether it should match any one condition 'OR', or all conditions 'AND' (default='OR')
+	 * @return array Returns array of associative arrays, each containing requested properties
+	 *
+	 */
+	public function find(array $options) {
+		
+		if(! $this->connected) return [];
+
+		$defaults = array(
+			'names' => array(),
+			'expires' => array(),
+			'expiresMode' => 'OR',
+			'get' => array('name', 'expires', 'data'),
+		);
+		$options = array_merge($defaults, $options);
+		
+		$props = $options['get'];
+		$names = $options['names'];
+		$expires = $options['expires'];
+
+		if(empty($names))
+			$names = ['*'];
+
+		$out   = [];
+
+		$searchNames = [];
+		
+		// Expand wilcard lookups to include all matched names. 		
+		foreach($names as $name) {
+			if(substr($name, -1) === "*") {
+					$searchNames = array_merge($searchNames, $this->findWildcardKeys('PW:' . $name));
+			} elseif(strpos($name, "*") !== false) {
+				throw new Expection(sprintf($this->_('Wildcards in key names are only allowed at the end of the pattern in %s', $this->className())));
+			} else {
+				$searchNames[$name] = 'PW:' . $name;
+			}
+		}
+		
+		foreach($searchNames as $k => $name) {
+			$entry = $this->getEntry($name, ctype_digit("$k") ? substr($name, 3) : $k);
+			if($entry !== false) {
+				$row = [];
+				foreach($props as $key) {
+					$row[$key] = $entry[$key];
+				}
+				$out[] = $row;
+			}
+		}
+		
+		return $out;
+		
+	}
+	
+	/**
+	 * For internal use
+	 */
+	public function getStatus() {
+		
+		$ret = [];
+		
+		foreach(['server','clients','memory','stats','cpu','cluster','keyspace','errorstats'] as $section) {
+			
+			$ret[$section] = $this->redis->info($section);
+			
+		}
+		
+		return $ret;
+		
+	}
+	
+	
+	/**
+	 * For internal use
+	 */
+	protected function findWildcardKeys($name)
+	{
+		$out = [];
+		
+		$it = null;
+		
+		while ($arr_keys = $this->redis->scan($it, $name)) {
+			$out = array_merge($out, $arr_keys);
+		}
+		
+		return $out;
+	}
+	
+	
+	/**
+	 * For internal use
+	 *
+	 * @param $name Name of the key in Redis with 'PW:' prepended
+	 * @param $kname Name of the key as WireCache sees it
+	 */
+	protected function getEntry($name, $kname) {
+		
+		$out = [
+			'name'			=>	$kname,
+			'expires'		=>	$this->getKeyExpires($name),
+			'data'			=>	$this->redis->get($name)
+		];
+		
+		if($out['data'] === false)
+			return false;
+		
+		if(is_array($out['data']))
+		{
+			
+			$out['size'] = $this->getArraySize($out['data']);
+			
+		} elseif(is_object($out['data']))
+		{
+			$out['size'] = mb_strlen(serialize($object));
+			
+		} else
+		{
+			$out['size'] = mb_strlen($out['data']);
+		}
+		
+		return $out;
+		
+	}
+	
+	protected function getArraySize($arr) {
+		
+		$size = 0;
+		
+		foreach($arr as $v) {
+			$size += is_array($v) ? $this->getArraySize($v) : mb_strlen($v);
+		}
+		
+		return $size;
+		
+	}
+	
+	protected function getKeyExpires($name) {
+		
+		$ttl = $this->redis->ttl($name);
+		
+		if($ttl == -2) {
+			return 0;
+		} elseif($ttl == -1) {
+			return WireCache::expireNever;
+		}
+		
+		return time() + $ttl;
+		
+	}
+	
+	/**
+	 * Save a cache
+	 *
+	 * @param string $name
+	 * @param string $data
+	 * @param string $expire
+	 * @return bool
+	 *
+	 */
+	public function save($name, $data, $expire) {
+		
+		$this->log(sprintf("Storing value for key %s with data %s (%s) and expire %s", $name, $data, gettype($data), $expire));
+		
+		if(! $this->connected) return false;
+		
+		if(!is_array($expire) && !is_object($expire))
+			$expire = strtotime($expire);
+		
+		if($expire == strtotime(WireCache::expireNever)) {
+			
+			$this->log(sprintf('expireNever for key %s', $name));
+			$expire = 0;
+			
+		} elseif($expire == strtotime(WireCache::expireSave)) {
+			
+			$this->addSelectorEntry(self::$typeSave, $name);
+			
+			$expire = 0;
+			
+		} elseif($expire == strtotime(WireCache::expireSelector)) {
+			
+			// https://github.com/processwire/processwire/blob/caed81876e48f54de86c31ffadf92d647cc4c6e3/wire/core/WireCache.php#L522
+			if(is_string($data))
+				$data = json_decode($data, true);
+			$selector = $data['selector'];
+			$data = $data['WireCache'];
+			
+			$this->addSelectorEntry(self::$typeSelector, $name, $selector);
+			
+			$expire = 0;
+			
+		} elseif(is_int($expire) && in_array($expire, self::$expireNames)) {
+			
+			$expireTime = time() + $expire;
+			
+		} elseif(is_array($expire) && isset($expire['selector']) || is_string($expire) && substr($expire, 0, 1) === '{') {
+			
+			if(is_string($expire))
+				$expire = json_decode($expire);
+			
+			$selector = $expire['selector'];
+
+			$this->addSelectorEntry(self::$typeSelector, $name, $selector);
+			
+			$expire = 0;
+			
+		}
+		
+		$this->redis->set('PW:' . $name, $data);
+		if($expire !== 0)
+			$this->redis->expireAt('PW:' . $name, $expire);
+		
+	}
+	
+	
+	protected function selector2string($selectors) {
+		
+		return 'ToDo';
+		
+	}
+	
+	
+	protected function addSelectorEntry($type, $name, $sel = '') {
+		
+		$key = self::$selectorPrefix . "$type:$sel";
+		$this->redis->sAdd($key, $name);
+		
+	}
+	
+	/**
+	 * Delete cache by name
+	 * 
+	 * @param string $name
+	 * @return bool
+	 * 
+	 */
+	public function delete($name) {
+		
+		if(! $this->connected) return false;
+		
+		return $this->redis->del($name) > 0;
+		
+	}
+
+
+	/**
+	 * Deletes the name of a key from all selector entries
+	 */
+	protected function deleteSelectorEntry($name) {
+		
+		$keys = $this->findWildcardKeys(self::$selectorPrefix . "*");
+		
+		foreach($keys as $key) {
+			$this->redis->sRem($key, $name);
+		}
+		
+	}
+	
+	/**
+	 * Delete all caches (except those reserved by the system)
+	 *
+	 * @return int
+	 *
+	 */
+	public function deleteAll() {
+		
+		if(! $this->connected) return 0;
+		
+		$count = $this->redis->dbSize();
+		$this->redis->flushDb();
+		
+		return $count;
+		
+	}
+	
+	/**
+	 * Delete all caches (except those reserved by the system)
+	 *
+	 * @return int
+	 *
+	 */
+	public function deletePwCaches() {
+		
+		if(! $this->connected) return 0;
+		
+		$keys = $this->findWildcardKeys('PW:*');
+		$this->redis->del($keys);
+
+		return count($keys);
+		
+	}
+	
+	/**
+	 * Count ProcessWire specific keys in Redis database
+	 *
+	 * @return int
+	 *
+	 */
+	public function countPwKeys() {
+		
+		if(! $this->connected) return 0;
+		
+		$keys = $this->findWildcardKeys('PW:*');
+
+		return count($keys);
+
+	}
+
+	/**
+	 * Count keys in the cache
+	 *
+	 * @return int
+	 *
+	 */
+	public function dbSize() {
+		
+		if(! $this->connected) return 0;
+		
+		return $this->redis->dbSize();
+		
+	}
+	
+	/**
+	 * Expire all caches
+	 *
+	 * Unlike WireCacheDatabase + WireCacheFilesystem, which keep entries with
+	 * WireCache::expireNever, all entries are deleted, regardless of expiration
+	 * values.
+	 *
+	 * @return int
+	 *
+	 */
+	public function expireAll() {
+		
+		return $this->deleteAll();
+		
+	}
+	
+	/**
+	 * This allows us to perform our own maintenance logic instead of leaving
+	 * WireCache to do the cleanup work.
+	 * For now, we let Redis handle all the expiration stuff on its own,
+	 * which means there is nothing to do.
+	 */
+	 public function maintenance($obj) {
+	 	
+	 	if(! $this->connected) {
+	 		$this->log->error($this->_("Unable to run maintenance, Redis not connected."));
+	 	}
+	 	
+	 	$maintenanceKeys = $this->getPageTemplateMaintenance();
+	 	
+	 	$mntTypes = [
+	 		'page'		=>	[],
+	 		'template'	=>	[],
+	 		'selector'	=>	[]
+	 	];
+	 	
+	 	/*
+	 	$f = fopen("C:/temp/maintkeys.txt", "w");
+	 	fputs($f, print_r($maintenanceKeys, true));
+	 	fclose($f);
+	 	*/
+	 	foreach($maintenanceKeys as $maintKey) {
+	 		
+	 		list($v1, $v2, $selType, $selector) = explode(':', $maintKey, 4);
+
+	 		switch($selType) {
+	 			case self::$typePage:
+	 				$mntTypes['page'][] = [
+	 					'selector'	=>	$selector,
+	 					'key'		=>	$maintKey
+	 				];
+	 				break;
+	 			case self::$typeTemplate:
+	 				$mntTypes['template'][] = [
+	 					'selector'	=>	$selector,
+	 					'key'		=>	$maintKey
+	 				];
+	 				break;
+	 			case self::$typeSelector:
+	 				$mntTypes['selector'][] = [
+	 					'selector'	=>	$selector,
+	 					'key'		=>	$maintKey
+	 				];
+	 				break;
+	 			default:
+	 				// do nothing	 				
+	 		}
+	 	}
+	 	
+	 	if($obj instanceof Page) {
+	 		
+	 		foreach($mntTypes['page'] as $pageId) {
+	 			
+	 			if($pageId === $obj->id) {
+	 				
+		 			$cacheKeys = $this->redis->sMembers($maintKey);
+		 			foreach($cacheKeys as $key) {
+		 				$this->redis->del($key);
+		 			}
+	 				
+	 			}
+	 			
+	 		}
+	 		
+		 	foreach($mntTypes['selector'] as $sel) {
+		 		
+		 		$selectors = new Selectors($sel['selector']);
+		 		if($obj->matches($selectors)) {
+		 			
+		 			$cacheKeys = $this->redis->sMembers($maintKey);
+		 			foreach($cacheKeys as $key) {
+		 				$this->redis->del($key);
+		 			}
+		 			
+		 		}
+		 		
+	 		}	
+	 	}
+	 	
+	 	if($obj instanceof Template) {
+	 		
+	 		foreach($mntTypes['template'] as $tplId) {
+	 			
+	 			if($tplId === $obj->id) {
+	 				
+		 			$cacheKeys = $this->redis->sMembers($maintKey);
+		 			foreach($cacheKeys as $key) {
+		 				$this->redis->del($key);
+		 			}
+	 				
+	 			}
+	 			
+	 		}
+	 		
+	 	}
+
+		
+	 	
+	 	// A true return value tells WireCache we already took care of things.
+	 	return true;
+	 }
+	
+	
+	protected function getPageTemplateMaintenance() {
+		
+		$pageTemplateKeys = $this->findWildcardKeys(self::$selectorPrefix . "*");
+		
+		return $pageTemplateKeys;
+		
+	}
+	
+	
+	public function ___install() {
+		
+	}
+
+
+	public function ___uninstall() {
+		
+	}
+	
+}
