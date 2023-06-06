@@ -90,7 +90,7 @@ class WireCachePoetRedis extends Process implements ConfigurableModule, WireCach
 			
 		} catch(Exception $e) {
 			
-			$this->log("Error connecting to Redis: {$e->message}");
+			$this->log(sprintf($this->_("Error connecting to Redis: %s"), $e->message));
 			
 		}
 		
@@ -289,8 +289,6 @@ class WireCachePoetRedis extends Process implements ConfigurableModule, WireCach
 	 */
 	public function save($name, $data, $expire) {
 		
-		$this->log(sprintf("Storing value for key %s with data %s (%s) and expire %s", $name, $data, gettype($data), $expire));
-		
 		if(! $this->connected) return false;
 		
 		if(!is_array($expire) && !is_object($expire))
@@ -298,7 +296,6 @@ class WireCachePoetRedis extends Process implements ConfigurableModule, WireCach
 		
 		if($expire == strtotime(WireCache::expireNever)) {
 			
-			$this->log(sprintf('expireNever for key %s', $name));
 			$expire = 0;
 			
 		} elseif($expire == strtotime(WireCache::expireSave)) {
@@ -415,8 +412,10 @@ class WireCachePoetRedis extends Process implements ConfigurableModule, WireCach
 		
 		$keys = $this->findWildcardKeys('PW:*');
 		$this->redis->del($keys);
+		$keys2 = $this->findWildcardKeys(self::$selectorPrefix . '*');
+		$this->redis->del($keys2);
 
-		return count($keys);
+		return count($keys) + count($keys2);
 		
 	}
 	
